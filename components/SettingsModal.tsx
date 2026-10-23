@@ -1,6 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { X, Check, AlertCircle, Loader2, Key, Palette, Keyboard, Zap, Download, RefreshCw } from 'lucide-react';
-import { setGeminiApiKey, setGeminiModel, getGeminiModel, getGeminiModelOptions, checkGeminiHealth } from '../services/geminiService';
+import { setGeminiApiKey, setGeminiModel, getGeminiModel } from '../services/geminiService';
+import { validateGeminiApiKey } from '../services/geminiKeyValidation';
 import { DEFAULT_QUOTA_CONFIG, getQuotaConfig, setQuotaConfig, getQuotaPercentage, getQuotaWarning, subscribeToQuotaUpdates } from '../services/quotaService';
 import type { UpdaterState } from '../types';
 
@@ -29,10 +30,10 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
 }) => {
     const [activeTab, setActiveTab] = useState<TabType>('api');
     const [geminiKey, setGeminiKey] = useState('');
+    const [keyStatus, setKeyStatus] = useState<'idle' | 'checking' | 'ok' | 'error'>('idle');
+    const [keyMessage, setKeyMessage] = useState('');
+    const keyCheckId = useRef(0);
     const [geminiModel, setGeminiModelState] = useState(getGeminiModel());
-    const [geminiModelOptions, setGeminiModelOptions] = useState<Array<{ id: string; label: string }>>([
-        { id: getGeminiModel(), label: getGeminiModel() },
-    ]);
     const [hasStoredGeminiKey, setHasStoredGeminiKey] = useState(false);
     const [status, setStatus] = useState<'idle' | 'saving' | 'success' | 'error'>('idle');
     const [msg, setMsg] = useState('');
@@ -41,6 +42,9 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
 
     // Load from localStorage on open
     useEffect(() => {
+        keyCheckId.current += 1;
+        setKeyStatus('idle');
+        setKeyMessage('');
         if (isOpen) {
             const readElectronEnv = (key: string): string => {
                 const env = window.electronEnv as any;
@@ -75,22 +79,6 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
             setGeminiModelState(modelToUse);
             setHasStoredGeminiKey(hasKey);
 
-            void getGeminiModelOptions(true)
-                .then((options) => {
-                    const normalizedOptions = options.length > 0
-                        ? options
-                        : [{ id: modelToUse, label: modelToUse }];
-
-                    if (!normalizedOptions.some((opt) => opt.id === modelToUse)) {
-                        normalizedOptions.unshift({ id: modelToUse, label: modelToUse });
-                    }
-
-                    setGeminiModelOptions(normalizedOptions);
-                })
-                .catch(() => {
-                    setGeminiModelOptions([{ id: modelToUse, label: modelToUse }]);
-                });
-
             if (quota) {
                 setQuotaState(quota);
                 setDailyLimit(quota.dailyLimit.toString());
@@ -106,13 +94,37 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
         });
     }, []);
 
+    const handleCheckKey = async (): Promise<boolean> => {
+        const checkId = ++keyCheckId.current;
+        setKeyStatus('checking');
+        setKeyMessage('Проверка доступа к Gemini...');
+        const result = await validateGeminiApiKey(geminiKey);
+        if (checkId !== keyCheckId.current) return false;
+        setKeyStatus(result.status);
+        setKeyMessage(result.message);
+        return result.status === 'ok';
+    };
+
     const handleSave = async () => {
+        if (status === 'saving' || keyStatus === 'checking') return;
         setStatus('saving');
         setMsg('Проверка ключей и сохранение...');
 
         try {
             const sanitizedGeminiKey = geminiKey.trim();
             const sanitizedGeminiModel = geminiModel.trim();
+
+            // A rejected draft must never replace the working key.
+            if (sanitizedGeminiKey) {
+                const checkId = keyCheckId.current + 1;
+                const valid = await handleCheckKey();
+                if (checkId !== keyCheckId.current) return;
+                if (!valid) {
+                    setStatus('error');
+                    setMsg('Настройки не сохранены. Проверьте API-ключ и повторите попытку.');
+                    return;
+                }
+            }
 
             // Update Services
             if (sanitizedGeminiKey) {
@@ -125,7 +137,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
                 localStorage.setItem('VITE_GEMINI_API_KEY', sanitizedGeminiKey);
                 setHasStoredGeminiKey(true);
             }
-            localStorage.setItem('VITE_GEMINI_MODEL', sanitizedGeminiModel);
+            localStorage.setItem('VITE_GEMINI_MODEL', getGeminiModel());
             
             // Save quota config
             const limit = parseInt(dailyLimit) || 1500;
@@ -133,21 +145,8 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
             setQuotaState(updatedQuota);
             setDailyLimit(updatedQuota.dailyLimit.toString());
 
-            // Health check for Gemini
-            if (sanitizedGeminiKey) {
-                setMsg('Проверка ключа Gemini...');
-                try {
-                    const health = await checkGeminiHealth();
-                    if (health.status !== 'ok') {
-                        console.warn('Gemini validation warning:', health.detail || health.status);
-                    }
-                } catch (err) {
-                    console.warn('Gemini health check failed (non-critical):', err);
-                }
-            }
-
             setStatus('success');
-            setMsg(sanitizedGeminiKey ? 'Настройки успешно сохранены!' : 'Лимит квоты сохранен. API ключ не изменен.');
+            setMsg(sanitizedGeminiKey ? 'Настройки успешно сохранены!' : 'Модель и лимит квоты сохранены. API ключ не изменен.');
             setTimeout(onClose, 1500);
 
         } catch (err: any) {
@@ -158,6 +157,9 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
     };
 
     const handleClearGeminiKey = () => {
+        keyCheckId.current += 1;
+        setKeyStatus('idle');
+        setKeyMessage('');
         localStorage.removeItem('VITE_GEMINI_API_KEY');
         setGeminiKey('');
         setHasStoredGeminiKey(false);
@@ -229,14 +231,37 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
                                     <input
                                         type="password"
                                         value={geminiKey}
-                                        onChange={(e) => setGeminiKey(e.target.value)}
+                                        disabled={status === 'saving' || keyStatus === 'checking'}
+                                        onChange={(e) => {
+                                            setGeminiKey(e.target.value);
+                                            setKeyStatus('idle');
+                                            setKeyMessage('');
+                                            setStatus('idle');
+                                            setMsg('');
+                                        }}
                                         placeholder="AIzaSy..."
                                         className="w-full glass border border-blue-500/50 rounded-xl px-4 py-3 text-sm text-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all placeholder:text-gray-700"
                                     />
-                                    {geminiKey && (
+                                    {keyStatus === 'ok' && (
                                         <div className="absolute right-3 top-1/2 -translate-y-1/2">
                                             <Check className="w-4 h-4 text-green-400" />
                                         </div>
+                                    )}
+                                </div>
+                                <div className="mt-3 space-y-2">
+                                    <button
+                                        type="button"
+                                        onClick={() => { void handleCheckKey(); }}
+                                        disabled={!geminiKey.trim() || keyStatus === 'checking' || status === 'saving'}
+                                        className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm border border-blue-500/30 text-blue-300 hover:bg-blue-500/10 disabled:opacity-50 disabled:cursor-not-allowed"
+                                    >
+                                        {keyStatus === 'checking' && <Loader2 className="w-4 h-4 animate-spin" />}
+                                        {keyStatus === 'checking' ? 'Проверка...' : 'Проверить ключ'}
+                                    </button>
+                                    {keyMessage && (
+                                        <p role="status" className={`text-xs ${keyStatus === 'error' ? 'text-red-300' : keyStatus === 'ok' ? 'text-green-400' : 'text-blue-300'}`}>
+                                            {keyMessage}
+                                        </p>
                                     )}
                                 </div>
                                 <p className="text-xs text-blue-300 mt-2 flex items-center gap-1">
@@ -250,6 +275,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
                                         <button
                                             type="button"
                                             onClick={handleClearGeminiKey}
+                                            disabled={status === 'saving' || keyStatus === 'checking'}
                                             className="px-2 py-1 rounded-md text-xs bg-red-500/10 border border-red-500/30 text-red-300 hover:bg-red-500/20"
                                         >
                                             Удалить ключ
@@ -260,22 +286,23 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
 
                             {/* Gemini Model */}
                             <div className="border border-blue-500/30 rounded-xl p-4 bg-blue-500/5">
-                                <label className="block text-sm font-semibold text-gray-200 mb-2">
+                                <label htmlFor="gemini-model" className="block text-sm font-semibold text-gray-200 mb-2">
                                     Модель Gemini для транскрибации
                                 </label>
-                                <select
+                                <input
+                                    id="gemini-model"
+                                    type="text"
                                     value={geminiModel}
+                                    disabled={status === 'saving'}
                                     onChange={(e) => setGeminiModelState(e.target.value)}
+                                    placeholder="gemini-2.5-flash"
+                                    autoComplete="off"
+                                    spellCheck={false}
+                                    aria-describedby="gemini-model-hint"
                                     className="w-full glass border border-blue-500/50 rounded-xl px-4 py-3 text-sm text-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all bg-gray-900/60"
-                                >
-                                    {geminiModelOptions.map((option) => (
-                                        <option key={option.id} value={option.id}>
-                                            {option.label}
-                                        </option>
-                                    ))}
-                                </select>
-                                <p className="text-xs text-blue-300 mt-2">
-                                    Список загружается из Gemini ListModels и показывает только недорогие Flash/Lite модели для транскрибации.
+                                />
+                                <p id="gemini-model-hint" className="text-xs text-blue-300 mt-2">
+                                    Введите название модели Gemini вручную, например gemini-2.5-flash. Пустое поле восстановит модель по умолчанию.
                                 </p>
                             </div>
 
@@ -495,7 +522,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
                     </button>
                     <button
                         onClick={handleSave}
-                        disabled={status === 'saving'}
+                        disabled={status === 'saving' || keyStatus === 'checking'}
                         className="flex-1 py-3 bg-gradient-primary text-white font-medium rounded-xl shadow-lg shadow-blue-500/20 hover:shadow-blue-500/40 transition-all interactive disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                         {status === 'saving' ? (

@@ -1,5 +1,6 @@
 ﻿import { GoogleGenAI } from "@google/genai";
 import { updateQuotaUsage } from './quotaService';
+import { transcribeWithInteractions, usesTranscriptionApi } from './geminiTranscribe';
 
 // Read env vars: Electron > Vite > process.env
 const _env = typeof import.meta !== 'undefined' ? (import.meta as any).env : {};
@@ -310,6 +311,27 @@ function trackQuota(prompt: string, output: string) {
 export async function checkGeminiHealth(timeoutMs = 2000) {
   if (!apiKey) return { status: 'auth', detail: 'GEMINI_API_KEY not set or invalid' };
 
+  if (usesTranscriptionApi(geminiModel)) {
+    // ASR requires audio; a text-only ping via generateContent is invalid.
+    const model = geminiModel;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}`, {
+        headers: { 'x-goog-api-key': apiKey },
+        signal: controller.signal,
+      });
+      if (response.ok) return { status: 'ok', model, detail: 'Model metadata available; transcription is checked with recorded audio.' };
+      if (response.status === 401 || response.status === 400) return { status: 'auth' };
+      if (response.status === 429) return { status: 'rate_limit' };
+      return { status: 'unreachable', detail: `Gemini model metadata: HTTP ${response.status}` };
+    } catch {
+      return { status: 'unreachable', detail: 'Unable to check Gemini model metadata.' };
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
   const candidates = await buildCandidateModels(geminiModel);
   let lastErr: any = null;
 
@@ -379,7 +401,7 @@ const classifyFinalError = (lastError: any) => {
   }
 
   if (classifyGeminiError(lastError) === 'model_unsupported') {
-    return new Error("Выбранная модель недоступна для вашего API/региона. Откройте Настройки и выберите доступную модель из списка.");
+    return new Error("Указанная модель недоступна для вашего API/региона. Откройте Настройки и введите название доступной модели.");
   }
 
   if (classifyGeminiError(lastError) === 'bad_request' || errMsg.includes('invalid') || errMsg.includes('bad request')) {
@@ -423,6 +445,41 @@ export const transcribeAudio = async (
   let lastTriedModel = geminiModel;
 
   const base64Audio = await blobToBase64(audioBlob);
+
+  if (geminiModel === 'gemini-3.5-transcribe-live') {
+    throw new Error('Для записанного аудио укажите gemini-3.5-transcribe. Модель transcribe-live требует потокового подключения.');
+  }
+
+  if (usesTranscriptionApi(geminiModel)) {
+    // Dedicated ASR has a different API and cannot follow translation/style prompts.
+    // Keep this path separate from the generateContent model fallback pool.
+    const selectedModel = geminiModel;
+    try {
+      let text = await transcribeWithInteractions({ apiKey, model: selectedModel, mimeType, base64Audio });
+      let provider = `Gemini (${selectedModel})`;
+      if (mode !== 'general') {
+        const instruction = mode === 'translator'
+          ? 'Переведи текст с русского на английский, сохрани смысл и тон. Верни только готовый перевод.'
+          : 'Оформи текст в официально-деловом стиле на русском языке. Исправь грамматику и пунктуацию, сохрани смысл и все факты. Верни только готовый текст.';
+        const result = await ai.models.generateContent({
+          model: DEFAULT_GEMINI_MODEL,
+          contents: { parts: [{ text: instruction }, { text }] },
+        });
+        const processed = result.text?.trim();
+        if (!processed) throw new Error('Gemini не вернул текст после перевода или редактирования транскрипции.');
+        text = processed;
+        provider += ` + ${DEFAULT_GEMINI_MODEL}`;
+      }
+      trackQuota(prompt, text);
+      return { text, provider };
+    } catch (error) {
+      if ((error as any)?.status === 403) {
+        throw new Error('Доступ к Gemini Transcribe запрещён (403). Проверьте доступность модели, ограничения ключа и регион.');
+      }
+      throw classifyFinalError(error);
+    }
+  }
+
   const candidateModels = await buildCandidateModels(geminiModel);
 
   for (const model of candidateModels) {
