@@ -77,7 +77,12 @@ function createDesktopControls({ app, ipcMain, globalShortcut, Tray, Menu, nativ
     return nativeImage.createFromBitmap(pixels, { width: 16, height: 16 });
   }
   app.on('before-quit', () => { quitting = true; });
-  app.on('will-quit', () => { overlay?.dispose(); shortcuts.dispose(); globalShortcut.unregisterAll(); });
+  app.on('will-quit', () => {
+    overlay?.dispose();
+    shortcuts.dispose();
+    // A second instance quits before Electron is ready and owns no shortcuts.
+    if (app.isReady()) globalShortcut.unregisterAll();
+  });
   return {
     async init() {
       tray = new Tray(makeIcon());

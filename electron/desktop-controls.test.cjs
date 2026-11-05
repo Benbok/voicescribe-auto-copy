@@ -21,6 +21,7 @@ function setup(options = {}) {
   window.webContents = new EventEmitter();
   window.webContents.send = (...args) => sent.push(args);
   app.getPath = () => require('node:os').tmpdir();
+  app.isReady = () => true;
   app.quit = () => { quits++; app.emit('before-quit'); app.emit('will-quit'); };
   class Tray extends EventEmitter { setContextMenu(menu) { this.menu = menu; } setToolTip(value) { this.tooltip = value; } setImage() {} }
   const trayInstances = [];
@@ -34,8 +35,19 @@ function setup(options = {}) {
     startWinAlt: async callback => { hook = callback; return () => stopped++; },
     ...options,
   });
-  return { desktop, window, handlers, listeners, sent, copied, trayInstances, hook: () => hook(), shown: () => shown, hidden: () => hidden, quits: () => quits, stopped: () => stopped };
+  return { app, desktop, window, handlers, listeners, sent, copied, trayInstances, hook: () => hook(), shown: () => shown, hidden: () => hidden, quits: () => quits, stopped: () => stopped };
 }
+
+test('secondary instance can quit before readiness without using globalShortcut', () => {
+  const s = setup({ globalShortcut: {
+    register() { assert.fail('Must not register before ready'); },
+    unregister() { assert.fail('Must not unregister before ready'); },
+    unregisterAll() { throw new Error('globalShortcut cannot be used before the app is ready'); },
+  } });
+  s.app.isReady = () => false;
+  assert.doesNotThrow(() => s.app.quit());
+  assert.equal(s.quits(), 1);
+});
 
 test('global toggle reaches hidden renderer without showing or focusing the window', async () => {
   const s = setup();
@@ -51,7 +63,8 @@ test('global toggle reaches hidden renderer without showing or focusing the wind
 });
 
 test('tray reopens window and explicit exit releases shortcut and allows close', async () => {
-  const s = setup();
+  let unregistered = 0;
+  const s = setup({ globalShortcut: { register: () => true, unregister() {}, unregisterAll() { unregistered++; } } });
   await s.desktop.init();
   s.desktop.attach(s.window);
   s.trayInstances[0].emit('double-click');
@@ -59,6 +72,7 @@ test('tray reopens window and explicit exit releases shortcut and allows close',
   s.trayInstances[0].menu.at(-1).click();
   assert.equal(s.quits(), 1);
   assert.equal(s.stopped(), 1);
+  assert.equal(unregistered, 1);
   s.window.emit('close', { preventDefault() { assert.fail('Quit must allow close'); } });
 });
 
