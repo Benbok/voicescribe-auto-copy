@@ -1,10 +1,11 @@
 {
   "name": "voicescribe-auto-copy",
   "private": true,
-  "version": "0.0.4",
+  "version": "0.0.5",
   "type": "module",
   "main": "electron/main.cjs",
   "scripts": {
+    "test": "node --test services/*.test.mjs electron/*.test.cjs",
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",

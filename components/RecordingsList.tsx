@@ -128,8 +128,16 @@ const RecordingsList: React.FC<RecordingsListProps> = ({ isOpen, onClose, onRetr
     if (!isOpen) return null;
 
     return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-md animate-fade-in">
-            <div className="glass-strong border border-gray-800/50 rounded-3xl w-full max-w-4xl max-h-[90vh] shadow-2xl relative animate-scale-in flex flex-col">
+        <div
+            onClick={(e) => {
+                if (e.target === e.currentTarget) onClose();
+            }}
+            className="fixed inset-0 z-[100] no-drag flex items-center justify-center p-4 bg-black/70 backdrop-blur-md animate-fade-in"
+        >
+            <div
+                onClick={(e) => e.stopPropagation()}
+                className="glass-strong border border-gray-800/50 rounded-3xl w-full max-w-4xl max-h-[90vh] shadow-2xl relative animate-scale-in flex flex-col no-drag"
+            >
 
                 {/* Header */}
                 <div className="p-6 border-b border-gray-800/50 flex items-center justify-between">
@@ -139,7 +147,8 @@ const RecordingsList: React.FC<RecordingsListProps> = ({ isOpen, onClose, onRetr
                     </div>
                     <button
                         onClick={onClose}
-                        className="p-2 text-gray-500 hover:text-white transition-all rounded-lg hover:bg-gray-800/50 interactive"
+                        type="button"
+                        className="no-drag w-9 h-9 flex items-center justify-center text-gray-500 hover:text-white transition-all rounded-xl hover:bg-gray-800/50 interactive cursor-pointer relative z-20 shrink-0"
                     >
                         <X className="w-5 h-5" />
                     </button>

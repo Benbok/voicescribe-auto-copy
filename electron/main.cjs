@@ -1,10 +1,17 @@
-const { app, BrowserWindow, ipcMain } = require('electron');
+const { app, BrowserWindow, ipcMain, globalShortcut, Tray, Menu, nativeImage, clipboard, screen } = require('electron');
+const { createDesktopControls } = require('./desktop-controls.cjs');
+const { createRecordingOverlay } = require('./recording-overlay.cjs');
 const path = require('path');
 const fs = require('fs');
 const { autoUpdater } = require('electron-updater');
 
 // Keep a global reference of the window object
 let mainWindow = null;
+const overlay = createRecordingOverlay({ BrowserWindow, screen });
+const desktopControls = createDesktopControls({ app, ipcMain, globalShortcut, Tray, Menu, nativeImage, clipboard, overlay, getWindow: () => mainWindow });
+const hasInstanceLock = app.requestSingleInstanceLock();
+if (!hasInstanceLock) app.quit();
+app.on('second-instance', () => desktopControls.show());
 
 const NORMAL_WINDOW_BOUNDS = {
   width: 1040,
@@ -179,6 +186,9 @@ function createWindow() {
   const rendererEnvVars = {
     GEMINI_API_KEY: envVars.GEMINI_API_KEY,
     VITE_GEMINI_API_KEY: envVars.VITE_GEMINI_API_KEY,
+    YANDEX_API_KEY: envVars.YANDEX_API_KEY || process.env.YANDEX_API_KEY,
+    YANDEX_FOLDER_ID: envVars.YANDEX_FOLDER_ID || process.env.YANDEX_FOLDER_ID,
+    YANDEX_GPT_MODEL: envVars.YANDEX_GPT_MODEL || process.env.YANDEX_GPT_MODEL,
   };
 
   // Create the browser window
@@ -195,6 +205,7 @@ function createWindow() {
       preload: path.join(__dirname, 'preload.cjs'),
       nodeIntegration: false,
       contextIsolation: true,
+      backgroundThrottling: false,
       sandbox: false,
     },
     icon: path.join(__dirname, '..', 'assets', 'icon.png'),
@@ -233,16 +244,19 @@ function createWindow() {
   });
 
   // Handle window closed
+  desktopControls.attach(mainWindow);
   mainWindow.on('closed', () => {
     mainWindow = null;
   });
 }
 
 // This method will be called when Electron has finished initialization
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
+  if (!hasInstanceLock) return;
   const envVars = loadEnvLocal();
   configureAutoUpdater(envVars);
   createWindow();
+  await desktopControls.init();
 
   app.on('activate', () => {
     // On macOS, re-create window when dock icon is clicked
@@ -430,6 +444,7 @@ ipcMain.handle('updater:download-update', async () => {
 
 ipcMain.handle('updater:quit-and-install', () => {
   if (app.isPackaged) {
+    desktopControls.prepareQuit();
     autoUpdater.quitAndInstall();
   }
   return { ...updateState };
@@ -475,6 +490,11 @@ ipcMain.handle('fetch-api', async (event, { url, options }) => {
           error: err.message || String(err),
         });
       });
+
+      const timeoutMs = Number(options.timeoutMs);
+      if (Number.isFinite(timeoutMs) && timeoutMs > 0) {
+        req.setTimeout(Math.min(timeoutMs, 120000), () => req.destroy(new Error('Request timed out')));
+      }
 
       // Send request body if present
       if (options.body) {

@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'">
+  <title>Состояние записи</title>
+  <link rel="stylesheet" href="overlay.css">
+</head>
+<body>
+  <main id="card" data-status="IDLE" role="status" aria-live="polite">
+    <div id="indicator"><span></span><span></span><span></span><span></span><span></span></div>
+    <div class="text"><strong id="title">Voice Scribe</strong><small id="subtitle">Готов к записи</small></div>
+    <time id="timer"></time>
+  </main>
+  <script src="overlay.js"></script>
+</body>
+</html>

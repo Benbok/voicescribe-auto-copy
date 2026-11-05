@@ -31,8 +31,16 @@ const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
     };
 
     return (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-fade-in">
-            <div className="glass-strong border border-gray-800/50 rounded-3xl w-full max-w-sm p-6 shadow-2xl animate-scale-in relative overflow-hidden">
+        <div
+            onClick={(e) => {
+                if (e.target === e.currentTarget) onCancel();
+            }}
+            className="fixed inset-0 z-[110] no-drag flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-fade-in"
+        >
+            <div
+                onClick={(e) => e.stopPropagation()}
+                className="glass-strong border border-gray-800/50 rounded-3xl w-full max-w-sm p-6 shadow-2xl animate-scale-in relative overflow-hidden no-drag"
+            >
                 {/* Background Glow */}
                 <div className={`absolute -top-10 -right-10 w-32 h-32 blur-[80px] opacity-20 ${variant === 'danger' ? 'bg-red-500' : 'bg-blue-500'}`} />
 

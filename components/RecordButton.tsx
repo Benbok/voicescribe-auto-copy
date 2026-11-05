@@ -54,10 +54,10 @@ const RecordButton: React.FC<RecordButtonProps> = ({
 
     // Dynamic style for the reactive background
     const reactiveStyle = isHovered && !isRecording && !isProcessing ? {
-        background: `radial-gradient(circle at ${gradientPos.x}% ${gradientPos.y}%, rgba(59, 130, 246, 1) 0%, rgba(37, 99, 235, 1) 40%, rgba(29, 78, 216, 1) 100%)`,
+        background: `radial-gradient(circle at ${gradientPos.x}% ${gradientPos.y}%, var(--theme-accent, #3b82f6) 0%, rgba(15, 15, 25, 0.95) 100%)`,
         boxShadow: `
       inset 0 0 20px rgba(255, 255, 255, 0.3),
-      0 10px 25px -5px rgba(59, 130, 246, 0.5)
+      var(--shadow-glow, 0 10px 25px -5px rgba(59, 130, 246, 0.5))
     `
     } : {};
 

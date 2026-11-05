@@ -1,0 +1,23 @@
+:root { color-scheme: dark; font-family: "Segoe UI", sans-serif; }
+* { box-sizing: border-box; }
+body { margin: 0; padding: 8px; background: transparent; user-select: none; }
+main { display: flex; align-items: center; gap: 12px; height: 72px; padding: 16px; border: 1px solid #ffffff24; border-radius: 20px; background: #111827f5; color: #f9fafb; box-shadow: 0 3px 8px #00000045; }
+.text { display: flex; flex: 1; min-width: 0; flex-direction: column; gap: 4px; }
+strong { font-size: 13px; font-weight: 600; white-space: nowrap; }
+small { font-size: 11px; color: #9ca3af; white-space: nowrap; }
+time { font-size: 12px; color: #fda4af; font-variant-numeric: tabular-nums; }
+#indicator { display: flex; align-items: center; justify-content: center; gap: 3px; width: 32px; height: 32px; color: #fb7185; }
+#indicator span { width: 3px; height: 8px; border-radius: 3px; background: currentColor; }
+[data-status="RECORDING"] { border-color: #fb71854d; }
+[data-status="RECORDING"] #indicator span { animation: voice 1s ease-in-out infinite alternate; }
+#indicator span:nth-child(2), #indicator span:nth-child(4) { height: 18px; animation-delay: -.3s; }
+#indicator span:nth-child(3) { height: 26px; animation-delay: -.6s; }
+[data-status="PROCESSING"] #indicator { color: #fbbf24; animation: fade 1s infinite alternate; }
+[data-status="COMPLETED"] #indicator { color: #4ade80; }
+[data-status="ERROR"] #indicator { color: #f87171; }
+[data-status="COMPLETED"] #indicator::before { content: "✓"; font-size: 28px; }
+[data-status="ERROR"] #indicator::before { content: "!"; font-size: 26px; font-weight: bold; }
+[data-status="COMPLETED"] #indicator span, [data-status="ERROR"] #indicator span { display: none; }
+@keyframes voice { to { transform: scaleY(.4); opacity: .65; } }
+@keyframes fade { to { opacity: .35; } }
+@media (prefers-reduced-motion: reduce) { * { animation: none !important; } }

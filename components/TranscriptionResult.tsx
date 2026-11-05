@@ -8,6 +8,7 @@ interface TranscriptionResultProps {
   copied: boolean;
   onManualCopy: () => void;
   compact?: boolean;
+  fontSize?: 'sm' | 'md' | 'lg';
 }
 
 const TranscriptionResult: React.FC<TranscriptionResultProps> = ({
@@ -15,7 +16,8 @@ const TranscriptionResult: React.FC<TranscriptionResultProps> = ({
   status,
   copied,
   onManualCopy,
-  compact = false
+  compact = false,
+  fontSize = 'md',
 }) => {
   // Подсчет слов и символов
   const wordCount = text ? text.trim().split(/\s+/).length : 0;
@@ -119,7 +121,7 @@ const TranscriptionResult: React.FC<TranscriptionResultProps> = ({
 
       {/* Текстовая область с улучшенной типографикой */}
       <div className={`${compact ? 'p-2 max-h-[180px] overflow-y-auto custom-scrollbar' : 'glass-strong rounded-2xl p-6 shadow-xl border border-gray-800/50 min-h-[200px] max-h-[400px] overflow-y-auto custom-scrollbar'}`}>
-        <p className={`${compact ? 'text-sm' : 'text-lg'} leading-relaxed text-gray-100 whitespace-pre-wrap font-sans selection:bg-blue-500/30 break-words`}>
+        <p className={`${compact ? 'text-sm' : fontSize === 'sm' ? 'text-[14px]' : fontSize === 'lg' ? 'text-[18px]' : 'text-[16px]'} leading-relaxed text-gray-100 whitespace-pre-wrap font-sans selection:bg-blue-500/30 break-words`}>
           {text}
         </p>
       </div>
@@ -130,7 +132,7 @@ const TranscriptionResult: React.FC<TranscriptionResultProps> = ({
           <div className="flex items-center gap-2 px-4 py-2 bg-green-500/10 border border-green-500/30 rounded-full">
             <Check className="w-4 h-4 text-green-400" />
             <span className="text-sm text-green-400 font-medium">
-              Автоматически скопировано в буфер обмена
+              Скопировано в буфер обмена
             </span>
           </div>
         </div>

@@ -16,6 +16,21 @@ contextBridge.exposeInMainWorld('electronEnv', {
 });
 
 contextBridge.exposeInMainWorld('electronAPI', {
+  getRecordingShortcut: () => ipcRenderer.invoke('shortcut:get'),
+  setRecordingShortcut: (accelerator) => ipcRenderer.invoke('shortcut:set', accelerator),
+  writeClipboardText: (text) => ipcRenderer.invoke('clipboard:write-text', text),
+  copyAndPasteText: (text) => ipcRenderer.invoke('clipboard:copy-and-paste', text),
+  setRecordingStatus: (status) => ipcRenderer.send('recording:status', status),
+  onRecordingToggle: (callback) => {
+    const handler = () => callback();
+    ipcRenderer.on('recording:toggle', handler);
+    return () => ipcRenderer.removeListener('recording:toggle', handler);
+  },
+  onShortcutStateChange: (callback) => {
+    const handler = (_, state) => callback(state);
+    ipcRenderer.on('shortcut:state', handler);
+    return () => ipcRenderer.removeListener('shortcut:state', handler);
+  },
   toggleMiniMode: (isMini) => ipcRenderer.invoke('toggle-mini-mode', isMini),
   setAlwaysOnTop: (value) => ipcRenderer.invoke('set-always-on-top', value),
   fetchApi: (url, options) => ipcRenderer.invoke('fetch-api', { url, options }),

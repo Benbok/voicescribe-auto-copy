@@ -14,7 +14,7 @@ export enum RecorderStatus {
 }
 
 export type TranscriptionMode = 'general' | 'corrector' | 'translator';
-export type TranscriptionProvider = 'gemini';
+export type TranscriptionProvider = 'gemini' | 'yandex';
 
 export type UpdaterStatus =
   | 'idle'
@@ -34,7 +34,20 @@ export interface UpdaterState {
   currentVersion: string;
 }
 
+export interface RecordingShortcutState {
+  accelerator: string;
+  registered: boolean;
+  error: string;
+}
+
 export interface ElectronAPI {
+  copyAndPasteText?: (text: string) => Promise<{ copied: boolean; pasted: boolean; reason?: string }>;
+  getRecordingShortcut?: () => Promise<RecordingShortcutState>;
+  setRecordingShortcut?: (accelerator: string) => Promise<RecordingShortcutState>;
+  onRecordingToggle?: (callback: () => void) => (() => void);
+  onShortcutStateChange?: (callback: (state: RecordingShortcutState) => void) => (() => void);
+  writeClipboardText?: (text: string) => Promise<void>;
+  setRecordingStatus?: (status: RecorderStatus | 'ERROR') => void;
   toggleMiniMode: (enabled: boolean) => Promise<void>;
   setAlwaysOnTop?: (value: boolean) => Promise<void>;
   fetchApi?: (url: string, options: Record<string, unknown>) => Promise<unknown>;
@@ -51,7 +64,9 @@ export interface ElectronAPI {
 declare global {
   interface Window {
     electronEnv?: {
-      [key: string]: string;
+      [key: string]: unknown;
+      get?: (key: string) => string | undefined;
+      getAll?: () => Record<string, string>;
     };
     electronAPI?: ElectronAPI;
   }

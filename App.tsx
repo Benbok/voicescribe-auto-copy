@@ -2,7 +2,9 @@
 import React, { useState, useRef, useCallback, useEffect } from 'react';
 import { Mic, Square, AlertCircle, Check, Copy, RotateCw, Settings as SettingsIcon, Monitor, History, Maximize2, X, Minus } from 'lucide-react';
 import { RecorderStatus, UpdaterState } from './types';
-import { transcribeAudio, TranscriptionMode, setGeminiApiKey, setGeminiModel, getGeminiModel, checkGeminiHealth } from './services/geminiService';
+import { setGeminiApiKey, setGeminiModel, getGeminiModel } from './services/geminiService';
+import type { TranscriptionMode } from './types';
+import { transcribeAudio, getTranscriptionProvider, checkProviderHealth } from './services/transcriptionService';
 import { saveRecording } from './services/storageService';
 import { DEFAULT_QUOTA_CONFIG, getQuotaPercentage, getQuotaConfig, getRemainingQuota, subscribeToQuotaUpdates } from './services/quotaService';
 import { checkForUpdates, downloadUpdate, getUpdaterState, quitAndInstallUpdate, subscribeUpdaterState } from './services/updaterService';
@@ -11,6 +13,14 @@ import TranscriptionResult from './components/TranscriptionResult';
 import RecordButton from './components/RecordButton';
 import SettingsModal from './components/SettingsModal';
 import RecordingsList from './components/RecordingsList';
+import { subscribeRecordingToggle, reportRecordingStatus, writeDesktopClipboard, createSpaceReleaseHandlers, pasteTranscript } from './services/shortcutService';
+import {
+  getAppearanceConfig,
+  subscribeAppearanceUpdates,
+  playSoundFeedback,
+  applyAppearanceToDOM,
+  AppearanceConfig,
+} from './services/appearanceService';
 
 const DEFAULT_UPDATER_STATE: UpdaterState = {
   status: 'idle',
@@ -52,6 +62,7 @@ const App: React.FC = () => {
   const [copied, setCopied] = useState<boolean>(false);
   const [stream, setStream] = useState<MediaStream | null>(null);
   const [copyError, setCopyError] = useState<boolean>(false);
+  const [deliveryNotice, setDeliveryNotice] = useState('');
   const [elapsedTime, setElapsedTime] = useState<number>(0);
   const [mode, setMode] = useState<TranscriptionMode>('general');
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -60,10 +71,28 @@ const App: React.FC = () => {
   const [updaterState, setUpdaterState] = useState<UpdaterState>(DEFAULT_UPDATER_STATE);
   const [isCheckingUpdates, setIsCheckingUpdates] = useState<boolean>(false);
   const [isInstallingUpdate, setIsInstallingUpdate] = useState<boolean>(false);
+  const [appearance, setAppearance] = useState<AppearanceConfig>(() => {
+    const cfg = getAppearanceConfig();
+    applyAppearanceToDOM(cfg);
+    return cfg;
+  });
+
+  useEffect(() => {
+    return subscribeAppearanceUpdates((updated) => {
+      setAppearance(updated);
+    });
+  }, []);
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<BlobPart[]>([]);
   const currentAudioBlobRef = useRef<Blob | null>(null);
+  const startingRecordingRef = useRef(false);
+  const statusRef = useRef(status);
+  statusRef.current = status;
+  const toggleRecordingRef = useRef<() => void>(() => {});
+
+  useEffect(() => subscribeRecordingToggle(() => toggleRecordingRef.current()), []);
+  useEffect(() => reportRecordingStatus(error ? 'ERROR' : status), [status, error]);
 
   // Cleanup stream on unmount or change
   useEffect(() => {
@@ -171,14 +200,14 @@ const App: React.FC = () => {
   // Health check on mount
   useEffect(() => {
     let mounted = true;
-    checkGeminiHealth().then(res => { if (mounted) setGeminiHealth(res as any); }).catch(e => { if (mounted) setGeminiHealth({ status: 'unreachable', detail: String(e) }); });
+    checkProviderHealth().then(res => { if (mounted) setGeminiHealth(res as any); }).catch(e => { if (mounted) setGeminiHealth({ status: 'unreachable', detail: String(e) }); });
     return () => { mounted = false };
   }, [isSettingsOpen]);
 
   const refreshHealth = async () => {
     setRefreshingHealth(true);
     try {
-      const res = await checkGeminiHealth();
+      const res = await checkProviderHealth();
       setGeminiHealth(res as any);
     } catch (e) {
       console.warn('Health refresh error', e);
@@ -217,8 +246,38 @@ const App: React.FC = () => {
     return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')} `;
   };
 
-  const copyToClipboard = useCallback(async (textToCopy: string) => {
+  const copyToClipboard = useCallback(async (textToCopy: string, autoPaste = false) => {
     setCopyError(false);
+    setDeliveryNotice('');
+
+    if (autoPaste) {
+      try {
+        const result = await pasteTranscript(textToCopy);
+        if (result.copied) {
+          setCopied(true);
+          setTimeout(() => setCopied(false), 3000);
+          if (!result.pasted) setDeliveryNotice(result.reason === 'clipboard-changed'
+            ? 'Буфер обмена изменился до вставки. Скопируйте результат кнопкой «Копировать».'
+            : result.reason === 'own-window'
+              ? 'Текст скопирован. Для автоматической вставки оставьте активным поле в другом приложении.'
+              : 'Текст скопирован. Автовставка не выполнена — нажмите Ctrl+V в нужном поле.');
+          return;
+        }
+      } catch {
+        // Continue with ordinary copy if the native delivery bridge fails.
+      }
+      setDeliveryNotice('Автовставка недоступна. Используйте Ctrl+V после копирования.');
+    }
+
+    try {
+      if (await writeDesktopClipboard(textToCopy)) {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 3000);
+        return;
+      }
+    } catch (err) {
+      console.warn('Desktop clipboard failed:', err);
+    }
 
     // Method 1: Async Clipboard API
     if (navigator.clipboard && navigator.clipboard.writeText) {
@@ -263,10 +322,13 @@ const App: React.FC = () => {
   }, []);
 
   const startRecording = async () => {
+    if (startingRecordingRef.current || statusRef.current === RecorderStatus.RECORDING || statusRef.current === RecorderStatus.PROCESSING) return;
+    startingRecordingRef.current = true;
     setError(null);
     setText("");
     setCopied(false);
     setCopyError(false);
+    setDeliveryNotice('');
     setElapsedTime(0);
     setLastProvider(null);
 
@@ -306,53 +368,60 @@ const App: React.FC = () => {
       };
 
       mediaRecorder.start();
+      playSoundFeedback('start');
+      statusRef.current = RecorderStatus.RECORDING;
       setStatus(RecorderStatus.RECORDING);
 
     } catch (err) {
       console.error("Error accessing microphone:", err);
       setError("Доступ к микрофону запрещен. Пожалуйста, разрешите доступ к микрофону.");
       setStatus(RecorderStatus.IDLE);
+    } finally {
+      startingRecordingRef.current = false;
     }
   };
 
   const stopRecording = () => {
-    if (mediaRecorderRef.current && status === RecorderStatus.RECORDING) {
+    if (mediaRecorderRef.current?.state === 'recording' && statusRef.current === RecorderStatus.RECORDING) {
+      playSoundFeedback('stop');
+      statusRef.current = RecorderStatus.PROCESSING;
       mediaRecorderRef.current.stop();
       setStatus(RecorderStatus.PROCESSING);
     }
   };
 
+  toggleRecordingRef.current = () => {
+    if (startingRecordingRef.current) return;
+    if (statusRef.current === RecorderStatus.RECORDING) stopRecording();
+    else if (statusRef.current !== RecorderStatus.PROCESSING) void startRecording();
+  };
+
   // Hotkeys: Space to toggle recording
   useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (['INPUT', 'TEXTAREA'].includes((e.target as HTMLElement).tagName)) {
-        return;
-      }
-
-      if (e.code === 'Space') {
-        e.preventDefault();
-
-        if (status === RecorderStatus.IDLE || status === RecorderStatus.COMPLETED) {
-          startRecording();
-        } else if (status === RecorderStatus.RECORDING) {
-          stopRecording();
-        }
-      }
+    const handlers = createSpaceReleaseHandlers(() => toggleRecordingRef.current(), e =>
+      e.defaultPrevented || isSettingsOpen || isHistoryOpen || Boolean((e.target as HTMLElement)?.isContentEditable)
+      || ['INPUT', 'TEXTAREA', 'SELECT', 'BUTTON'].includes((e.target as HTMLElement)?.tagName));
+    window.addEventListener('keydown', handlers.keydown);
+    window.addEventListener('keyup', handlers.keyup);
+    window.addEventListener('blur', handlers.blur);
+    return () => {
+      window.removeEventListener('keydown', handlers.keydown);
+      window.removeEventListener('keyup', handlers.keyup);
+      window.removeEventListener('blur', handlers.blur);
     };
+  }, [isSettingsOpen, isHistoryOpen]);
 
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [status]);
-
-  const handleTranscription = async (audioBlob: Blob) => {
+  const handleTranscription = async (audioBlob: Blob, autoPaste = true) => {
     try {
       setStatus(RecorderStatus.PROCESSING);
-      const result = await transcribeAudio(audioBlob, mode, 'gemini');
+      const result = await transcribeAudio(audioBlob, mode);
 
       setText(result.text);
       setLastProvider(result.provider);
+      if (appearance.autoCopy) {
+        await copyToClipboard(result.text, autoPaste);
+      }
       setStatus(RecorderStatus.COMPLETED);
-      await copyToClipboard(result.text);
 
       try {
         await saveRecording(audioBlob, result.text, {
@@ -377,11 +446,16 @@ const App: React.FC = () => {
     setCopied(false);
     setLastProvider(null);
     currentAudioBlobRef.current = audioBlob;
-    handleTranscription(audioBlob);
+    handleTranscription(audioBlob, false);
   };
 
   return (
-    <div className={`h-screen bg-gradient-to-br from-gray-950 via-gray-900 to-purple-950/30 text-white flex flex-col overflow-hidden ${isMiniMode ? 'p-0 bg-transparent' : 'p-4 rounded-[24px]'}`}>
+    <div
+      className={`h-screen text-white flex flex-col overflow-hidden transition-all duration-300 ${isMiniMode ? 'p-0 bg-transparent' : 'p-4 rounded-[24px]'}`}
+      style={{
+        background: isMiniMode ? 'transparent' : 'var(--theme-bg-gradient)',
+      }}
+    >
       <div className={`w-full flex-1 ${isMiniMode ? 'flex flex-col h-full bg-transparent' : 'max-w-6xl mx-auto flex flex-col'}`}>
 
         {isMiniMode ? (
@@ -436,10 +510,16 @@ const App: React.FC = () => {
 
             {/* Header */}
             <header className="glass rounded-2xl p-4 border border-white/10 relative overflow-hidden mt-6">
-              <div className="absolute inset-0 bg-gradient-to-r from-blue-600/10 via-purple-600/10 to-pink-600/10"></div>
+              <div
+                className="absolute inset-0 transition-opacity duration-300"
+                style={{ background: 'var(--theme-header-glow)' }}
+              ></div>
               <div className="relative flex items-center justify-between">
                 <div className="drag-area flex-1 cursor-default">
-                  <h1 className="text-2xl font-bold bg-gradient-to-r from-blue-400 via-purple-400 to-pink-400 bg-clip-text text-transparent">
+                  <h1
+                    className="text-2xl font-bold bg-clip-text text-transparent transition-all duration-300"
+                    style={{ backgroundImage: 'var(--theme-title-gradient)' }}
+                  >
                     Voice Scribe
                   </h1>
                   <p className="text-gray-500 text-xs mt-0.5">Транскрибация RU/EN • Автокопирование</p>
@@ -476,14 +556,29 @@ const App: React.FC = () => {
               <div className="w-72 flex flex-col gap-3 flex-shrink-0">
                 {/* Visualizer */}
                 <div className="glass rounded-2xl p-4 border border-white/10 h-28 relative overflow-hidden">
-                  <div className="absolute inset-0 bg-gradient-to-br from-blue-500/5 to-purple-500/5"></div>
+                  <div
+                    className="absolute inset-0 transition-opacity duration-300"
+                    style={{ background: 'var(--theme-header-glow)' }}
+                  ></div>
                   {status === RecorderStatus.RECORDING ? (
-                    <Visualizer stream={stream} isRecording={true} />
+                    <Visualizer
+                      stream={stream}
+                      isRecording={true}
+                      visualizerStyle={appearance.visualizer}
+                      themePreset={appearance.theme}
+                    />
                   ) : (
                     <div className="flex items-center justify-center h-full opacity-20">
                       <div className="flex gap-1.5 items-end">
                         {[16, 28, 20, 32, 24, 36, 20, 28].map((h, i) => (
-                          <div key={i} className="w-1.5 bg-gradient-to-t from-blue-500 to-purple-500 rounded-full" style={{ height: `${h}px` }} />
+                          <div
+                            key={i}
+                            className="w-1.5 rounded-full transition-all duration-300"
+                            style={{
+                              height: `${h}px`,
+                              background: 'var(--theme-title-gradient)',
+                            }}
+                          />
                         ))}
                       </div>
                     </div>
@@ -505,8 +600,13 @@ const App: React.FC = () => {
                       <button
                         key={m}
                         onClick={() => setMode(m)}
+                        style={mode === m ? {
+                          backgroundColor: 'var(--theme-mode-active-bg)',
+                          borderColor: 'var(--theme-mode-active-border)',
+                          color: 'var(--theme-mode-active)',
+                        } : undefined}
                         className={`py-1.5 px-2 rounded-lg text-[11px] font-medium transition-all ${mode === m
-                          ? 'bg-blue-500/20 text-blue-400 border border-blue-500/30'
+                          ? 'border shadow-sm'
                           : 'bg-white/5 text-gray-500 hover:text-gray-300 hover:bg-white/10 border border-transparent'
                           }`}
                       >
@@ -534,7 +634,14 @@ const App: React.FC = () => {
               {/* Right Panel - Result */}
               <div className="flex-1 glass rounded-2xl p-5 border border-white/10 flex flex-col min-h-0">
                 <div className="flex-1 overflow-y-auto custom-scrollbar">
-                  <TranscriptionResult text={text} status={status} copied={copied} onManualCopy={() => text && copyToClipboard(text)} />
+                  <TranscriptionResult
+                    text={text}
+                    status={status}
+                    copied={copied}
+                    onManualCopy={() => text && copyToClipboard(text)}
+                    fontSize={appearance.fontSize}
+                  />
+                  {deliveryNotice && <p role="status" className="mt-2 text-xs text-amber-300">{deliveryNotice}</p>}
                 </div>
                 {lastProvider && (
                   <div className="mt-3 pt-3 border-t border-white/5 text-center text-[10px] text-gray-600">
@@ -549,19 +656,19 @@ const App: React.FC = () => {
             <footer className="glass rounded-2xl p-3 border border-white/10">
               <div className="flex items-center justify-between text-[10px]">
                 <div className="flex items-center gap-4">
-                  <div className="flex items-center gap-1.5">
-                    <span className="text-gray-600">{getGeminiModel()}:</span>
+                  <div className="flex items-center gap-1.5" title={geminiHealth?.detail}>
+                    <span className="text-gray-600">{getTranscriptionProvider() === 'yandex' ? 'Yandex SpeechKit' : getGeminiModel()}:</span>
                     <HealthDot status={geminiHealth?.status} />
-                    <span className="text-gray-500 capitalize">{geminiHealth?.status || '—'}</span>
+                    <span className="text-gray-500 capitalize">{geminiHealth?.status === 'configured' ? 'Настроен' : geminiHealth?.status || '—'}</span>
                   </div>
-                  <div className="h-3 w-px bg-white/10"></div>
+                  {getTranscriptionProvider() === 'gemini' && <><div className="h-3 w-px bg-white/10"></div>
                   <div className="flex items-center gap-1.5">
                     <span className="text-gray-600">Квота:</span>
                     <span className="text-gray-400">
                       {getRemainingQuota(quotaConfig)} / {quotaConfig.dailyLimit} токенов
                     </span>
                     <span className="text-gray-500">({Math.round(getQuotaPercentage(quotaConfig))}%)</span>
-                  </div>
+                  </div></>}
                 </div>
                 <button
                   onClick={refreshHealth}
@@ -599,6 +706,7 @@ const App: React.FC = () => {
 // Health indicator dot component
 const HealthDot: React.FC<{ status?: string | null }> = ({ status }) => {
   const s = (status || '').toLowerCase();
+  if (s === 'configured') return <span className="w-2 h-2 inline-block rounded-full bg-blue-400" title="Настройки заполнены; доступ проверяется при обработке записи"></span>;
   if (s === 'ok') return <span className="w-2 h-2 inline-block rounded-full bg-green-400 shadow-lg shadow-green-400/50" title="OK"></span>;
   if (s === 'rate_limit' || s === 'degraded') return <span className="w-2 h-2 inline-block rounded-full bg-yellow-400 shadow-lg shadow-yellow-400/50" title={status ?? undefined}></span>;
   if (s === 'auth' || s === 'unreachable') return <span className="w-2 h-2 inline-block rounded-full bg-red-500 shadow-lg shadow-red-500/50" title={status ?? undefined}></span>;
